@@ -269,13 +269,7 @@ private struct SessionRow: View {
 
                     StateBadge(state: session.state)
 
-                    Text(session.agent.rawValue)
-                        .font(.system(size: 10, weight: .bold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(.blue.opacity(0.28))
-                        .foregroundStyle(.blue.opacity(0.95))
-                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    AgentBadge(agent: session.agent)
 
                     Text(session.elapsed)
                         .font(.system(size: 10, weight: .semibold))
@@ -317,6 +311,52 @@ private struct SessionRow: View {
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(.secondary)
+    }
+}
+
+private struct AgentBadge: View {
+    let agent: AgentKind
+#if DEBUG
+    @ObserveInjection var inject
+#endif
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(mark)
+                .font(.system(size: 9, weight: .black))
+                .baselineOffset(0.5)
+
+            Text(agent.rawValue)
+                .font(.system(size: 10, weight: .bold))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.22))
+        .foregroundStyle(color)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+#if DEBUG
+        .enableInjection()
+#endif
+    }
+
+    private var mark: String {
+        switch agent {
+        case .claude: "✶"
+        case .codex: "⌘"
+        case .gemini: "✦"
+        case .cursor: "›"
+        case .unknown: "•"
+        }
+    }
+
+    private var color: Color {
+        switch agent {
+        case .claude: Color(red: 0.82, green: 0.42, blue: 0.26)
+        case .codex: .mint
+        case .gemini: .purple
+        case .cursor: .blue
+        case .unknown: .secondary
+        }
     }
 }
 

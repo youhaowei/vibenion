@@ -1,6 +1,6 @@
 import Foundation
 
-enum AgentKind: String, CaseIterable, Identifiable {
+enum AgentKind: String, CaseIterable, Identifiable, Sendable {
     case codex = "Codex"
     case claude = "Claude"
     case gemini = "Gemini"
@@ -20,7 +20,7 @@ enum AgentKind: String, CaseIterable, Identifiable {
     }
 }
 
-enum SessionState: String {
+enum SessionState: String, Sendable {
     case running = "Running"
     case idle = "Idle"
     case stale = "Stale"
@@ -42,7 +42,7 @@ enum SessionState: String {
     }
 }
 
-struct AgentSession: Identifiable, Equatable {
+struct AgentSession: Identifiable, Equatable, Sendable {
     let id: String
     var title: String
     var agent: AgentKind
@@ -59,26 +59,44 @@ struct AgentSession: Identifiable, Equatable {
     }
 }
 
+private struct DiscoveredAgentSessions: Sendable {
+    let claude: [ClaudeDiscoveredSession]
+    let codex: [CodexDiscoveredSession]
+}
+
 @MainActor
 final class AgentSessionStore: ObservableObject {
     @Published var sessions: [AgentSession] = []
 
     private let eventLog: AgentEventLog
     private let claudeDiscovery: ClaudeSessionDiscovery
+    private let codexDiscovery: CodexSessionDiscovery
     private var refreshTask: Task<Void, Never>?
     private var latestEventOffset = 0
+    private var isRefreshingDiscoveredSessions = false
 
     init(
         eventLog: AgentEventLog = .default,
-        claudeDiscovery: ClaudeSessionDiscovery = .default
+        claudeDiscovery: ClaudeSessionDiscovery = .default,
+        codexDiscovery: CodexSessionDiscovery = .default
     ) {
         self.eventLog = eventLog
         self.claudeDiscovery = claudeDiscovery
-        refresh()
+        self.codexDiscovery = codexDiscovery
+        loadNewEvents()
         refreshTask = Task { [weak self] in
+            await self?.refreshDiscoveredSessions()
+
+            var ticksUntilDiscoveryRefresh = 5
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
-                self?.refresh()
+                self?.loadNewEvents()
+
+                ticksUntilDiscoveryRefresh -= 1
+                if ticksUntilDiscoveryRefresh <= 0 {
+                    ticksUntilDiscoveryRefresh = 5
+                    await self?.refreshDiscoveredSessions()
+                }
             }
         }
     }
@@ -120,13 +138,25 @@ final class AgentSessionStore: ObservableObject {
         mutate(&sessions[index])
     }
 
-    private func refresh() {
-        loadClaudeSessions()
-        loadNewEvents()
+    private func refreshDiscoveredSessions() async {
+        guard !isRefreshingDiscoveredSessions else { return }
+        isRefreshingDiscoveredSessions = true
+        defer { isRefreshingDiscoveredSessions = false }
+
+        let claudeDiscovery = claudeDiscovery
+        let codexDiscovery = codexDiscovery
+        let discovered = await Task.detached(priority: .utility) {
+            DiscoveredAgentSessions(
+                claude: claudeDiscovery.discover(),
+                codex: codexDiscovery.discover()
+            )
+        }.value
+
+        loadDiscoveredSessions(discovered)
     }
 
-    private func loadClaudeSessions() {
-        let discovered = claudeDiscovery.discover().map(makeSession)
+    private func loadDiscoveredSessions(_ discovered: DiscoveredAgentSessions) {
+        let discovered = discovered.claude.map(makeSession) + discovered.codex.map(makeSession)
         let discoveredIDs = Set(discovered.map(\.id))
         let manualSessions = sessions.filter { !discoveredIDs.contains($0.id) }
         sessions = sortSessions(discovered + manualSessions)
@@ -138,10 +168,12 @@ final class AgentSessionStore: ObservableObject {
         let title = metadata.name ?? discovered.repo.name
         let branch = discovered.repo.branch
         let summaryParts = [
-            state == .done ? "Claude process is no longer running" : "Claude Code \(metadata.status)",
+            state == .done ? "Claude session" : "Claude Code \(metadata.status)",
             branch.map { "on \($0)" },
+            discovered.messageCount.map { "\($0) messages" },
             metadata.version.map { "v\($0)" },
         ].compactMap(\.self)
+        let pidEvent = metadata.pid.map { "pid: \($0)" }
 
         return AgentSession(
             id: metadata.sessionID,
@@ -153,18 +185,33 @@ final class AgentSessionStore: ObservableObject {
             summary: summaryParts.joined(separator: " · "),
             events: [
                 "cwd: \(metadata.cwd)",
-                "pid: \(metadata.pid)",
-            ],
+                pidEvent,
+            ].compactMap(\.self),
             cwd: metadata.cwd,
             branch: branch
         )
     }
 
+    private func makeSession(from discovered: CodexDiscoveredSession) -> AgentSession {
+        AgentSession(
+            id: discovered.id,
+            title: discovered.title,
+            agent: .codex,
+            terminal: "Codex",
+            elapsed: relativeTime(from: discovered.updatedAt),
+            state: .idle,
+            summary: "Codex session",
+            events: [],
+            cwd: nil,
+            branch: nil
+        )
+    }
+
     private func mapClaudeState(
         metadata: ClaudeSessionMetadata,
-        isProcessAlive: Bool
+        isProcessAlive: Bool?
     ) -> SessionState {
-        guard isProcessAlive else { return .done }
+        guard isProcessAlive ?? false else { return .done }
 
         let ageSeconds = Date().timeIntervalSince1970 - ((metadata.updatedAt ?? 0) / 1000)
         if metadata.status == "busy", ageSeconds > 15 * 60 {
@@ -181,7 +228,14 @@ final class AgentSessionStore: ObservableObject {
     private func relativeTime(from milliseconds: Double?) -> String {
         guard let milliseconds else { return "now" }
         let seconds = max(0, Int(Date().timeIntervalSince1970 - (milliseconds / 1000)))
+        return relativeTime(fromSeconds: seconds)
+    }
 
+    private func relativeTime(from date: Date) -> String {
+        relativeTime(fromSeconds: max(0, Int(Date().timeIntervalSince(date))))
+    }
+
+    private func relativeTime(fromSeconds seconds: Int) -> String {
         if seconds < 60 {
             return "<1m"
         }
