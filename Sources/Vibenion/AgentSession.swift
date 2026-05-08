@@ -250,3 +250,56 @@ final class AgentSessionStore: ObservableObject {
         sessions = sortSessions(sessions)
     }
 }
+
+#if DEBUG
+@MainActor
+extension AgentSessionStore {
+    static func preview(sessions: [AgentSession] = AgentSession.previewSessions) -> AgentSessionStore {
+        let store = AgentSessionStore()
+        store.refreshTask?.cancel()
+        store.sessions = sessions
+        return store
+    }
+}
+
+extension AgentSession {
+    static let previewSessions = [
+        AgentSession(
+            id: "preview-codex",
+            title: "codex/hot-reload",
+            agent: .codex,
+            terminal: "Codex",
+            elapsed: "4m",
+            state: .running,
+            summary: "Wiring SwiftUI preview flow",
+            events: ["Read package manifest", "Added preview fixture"],
+            cwd: "/Users/youhaowei/Projects/vibenion",
+            branch: "codex/hot-reload"
+        ),
+        AgentSession(
+            id: "preview-claude",
+            title: "Claude UI pass",
+            agent: .claude,
+            terminal: "Claude Code",
+            elapsed: "12m",
+            state: .needsApproval,
+            summary: "Waiting for approval on panel placement",
+            events: ["Generated island shape", "Needs approval"],
+            cwd: "/Users/youhaowei/Projects/vibenion",
+            branch: "main"
+        ),
+        AgentSession(
+            id: "preview-done",
+            title: "Settings cleanup",
+            agent: .cursor,
+            terminal: "Cursor",
+            elapsed: "1h",
+            state: .done,
+            summary: "Finished small settings copy pass",
+            events: ["Updated toggles", "Verified build"],
+            cwd: "/Users/youhaowei/Projects/vibenion",
+            branch: nil
+        ),
+    ]
+}
+#endif

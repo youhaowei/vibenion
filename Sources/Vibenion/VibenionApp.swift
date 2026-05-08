@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if panelController.isVisible {
-            panelController.hide()
+            panelController.toggleExpanded()
         } else {
             panelController.show()
         }
