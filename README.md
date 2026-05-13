@@ -86,8 +86,10 @@ For cmux, include workspace/surface metadata so Vibenion can select the exact pa
 
 For Codex Desktop, Vibenion uses the Codex thread id from discovery or
 `terminal_metadata.thread_id` to open the app's local-conversation deep link:
-`codex://local/<thread_id>`. If the deep link cannot be opened, it falls back to
-focusing Codex and trying the local app-server/visible-sidebar paths.
+`codex://threads/<thread_id>` (thread id must be a full UUID — Codex validates
+it against `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).
+If the deep link cannot be opened, it falls back to focusing Codex and trying
+the local app-server/visible-sidebar paths.
 
 ```json
 {"session_id":"019e0850-8f41-7e90-b6c9-a67946f7b2a7","agent":"codex","state":"running","summary":"Running tests","title":"api cleanup","terminal":"Codex","terminal_metadata":{"bundle_id":"com.openai.codex","thread_id":"019e0850-8f41-7e90-b6c9-a67946f7b2a7"}}

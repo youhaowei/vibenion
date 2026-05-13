@@ -87,7 +87,7 @@ struct TerminalFocusService: TerminalFocusing {
 
     private func openCodexDeepLinkIfPossible(_ target: TerminalTarget) -> Bool {
         guard let threadID = target.threadID?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-            let url = URL(string: "codex://local/\(threadID)")
+            let url = URL(string: "codex://threads/\(threadID)")
         else {
             return false
         }
