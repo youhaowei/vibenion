@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOG_DIR="$ROOT/.vibenion"
+LOG_FILE="$LOG_DIR/run.log"
+
+mkdir -p "$LOG_DIR"
+
+cd "$ROOT"
+
+swift build
+
+if pgrep -x Vibenion >/dev/null 2>&1; then
+  pkill -x Vibenion
+fi
+
+nohup "$ROOT/.build/debug/Vibenion" >"$LOG_FILE" 2>&1 &
+
+echo "Vibenion rebuilt and launched."
+echo "Log: $LOG_FILE"

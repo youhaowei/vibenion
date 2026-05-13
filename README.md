@@ -22,6 +22,18 @@ swift test
 swift run Vibenion
 ```
 
+To rebuild and relaunch without Xcode:
+
+```sh
+scripts/rebuild-and-run
+```
+
+The Codex App run button is also wired through:
+
+```sh
+.codex/environments/environment.toml
+```
+
 ## Current Slice
 
 - Floating non-activating notch panel
