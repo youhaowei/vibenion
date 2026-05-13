@@ -60,9 +60,37 @@ struct AgentSession: Identifiable, Equatable, Sendable {
     }
 }
 
+private struct CmuxLocationIndex: Sendable {
+    private let byPID: [Int: CmuxAgentLocation]
+    private let claudeLocations: [CmuxAgentLocation]
+    private let codexLocations: [CmuxAgentLocation]
+
+    init(locations: [CmuxAgentLocation]) {
+        var byPID: [Int: CmuxAgentLocation] = [:]
+        for location in locations where location.rootPID > 0 {
+            byPID[location.rootPID] = location
+        }
+        self.byPID = byPID
+        self.claudeLocations = locations.filter { $0.agent == .claude }
+        self.codexLocations = locations.filter { $0.agent == .codex }
+    }
+
+    func locateClaude(pid: Int?) -> CmuxAgentLocation? {
+        guard let pid, let location = byPID[pid], location.agent == .claude else {
+            return nil
+        }
+        return location
+    }
+
+    func locateCodex() -> CmuxAgentLocation? {
+        codexLocations.count == 1 ? codexLocations.first : nil
+    }
+}
+
 private struct DiscoveredAgentSessions: Sendable {
     let claude: [ClaudeDiscoveredSession]
     let codex: [CodexDiscoveredSession]
+    let cmuxLocations: [CmuxAgentLocation]
 }
 
 @MainActor
@@ -72,6 +100,7 @@ final class AgentSessionStore: ObservableObject {
     private let eventLog: AgentEventLog
     private let claudeDiscovery: ClaudeSessionDiscovery
     private let codexDiscovery: CodexSessionDiscovery
+    private let cmuxDiscovery: CmuxSessionDiscovery
     private var refreshTask: Task<Void, Never>?
     private var latestEventOffset = 0
     private var isRefreshingDiscoveredSessions = false
@@ -79,11 +108,13 @@ final class AgentSessionStore: ObservableObject {
     init(
         eventLog: AgentEventLog = .default,
         claudeDiscovery: ClaudeSessionDiscovery = .default,
-        codexDiscovery: CodexSessionDiscovery = .default
+        codexDiscovery: CodexSessionDiscovery = .default,
+        cmuxDiscovery: CmuxSessionDiscovery = .default
     ) {
         self.eventLog = eventLog
         self.claudeDiscovery = claudeDiscovery
         self.codexDiscovery = codexDiscovery
+        self.cmuxDiscovery = cmuxDiscovery
         loadNewEvents()
         refreshTask = Task { [weak self] in
             await self?.refreshDiscoveredSessions()
@@ -146,10 +177,12 @@ final class AgentSessionStore: ObservableObject {
 
         let claudeDiscovery = claudeDiscovery
         let codexDiscovery = codexDiscovery
+        let cmuxDiscovery = cmuxDiscovery
         let discovered = await Task.detached(priority: .utility) {
             DiscoveredAgentSessions(
                 claude: claudeDiscovery.discover(),
-                codex: codexDiscovery.discover()
+                codex: codexDiscovery.discover(),
+                cmuxLocations: cmuxDiscovery.discover()
             )
         }.value
 
@@ -157,13 +190,19 @@ final class AgentSessionStore: ObservableObject {
     }
 
     private func loadDiscoveredSessions(_ discovered: DiscoveredAgentSessions) {
-        let discovered = discovered.claude.map(makeSession) + discovered.codex.map(makeSession)
-        let discoveredIDs = Set(discovered.map(\.id))
+        let cmuxIndex = CmuxLocationIndex(locations: discovered.cmuxLocations)
+        let claudeSessions = discovered.claude.map { makeSession(from: $0, cmuxIndex: cmuxIndex) }
+        let codexSessions = discovered.codex.map { makeSession(from: $0, cmuxIndex: cmuxIndex) }
+        let discoveredSessions = claudeSessions + codexSessions
+        let discoveredIDs = Set(discoveredSessions.map(\.id))
         let manualSessions = sessions.filter { !discoveredIDs.contains($0.id) }
-        sessions = sortSessions(discovered + manualSessions)
+        sessions = sortSessions(discoveredSessions + manualSessions)
     }
 
-    private func makeSession(from discovered: ClaudeDiscoveredSession) -> AgentSession {
+    private func makeSession(
+        from discovered: ClaudeDiscoveredSession,
+        cmuxIndex: CmuxLocationIndex
+    ) -> AgentSession {
         let metadata = discovered.metadata
         let state = mapClaudeState(metadata: metadata, isProcessAlive: discovered.isProcessAlive)
         let title = metadata.name ?? discovered.repo.name
@@ -175,13 +214,16 @@ final class AgentSessionStore: ObservableObject {
             metadata.version.map { "v\($0)" },
         ].compactMap(\.self)
         let pidEvent = metadata.pid.map { "pid: \($0)" }
+        let cmuxLocation = cmuxIndex.locateClaude(pid: metadata.pid)
+        let terminalTarget = cmuxLocation.map(makeCmuxTerminalTarget)
+        let terminal = terminalTarget?.displayName ?? "Claude Code"
 
         return AgentSession(
             id: metadata.sessionID,
             title: title,
             agent: .claude,
-            terminal: "Claude Code",
-            terminalTarget: nil,
+            terminal: terminal,
+            terminalTarget: terminalTarget,
             elapsed: relativeTime(from: metadata.updatedAt ?? metadata.startedAt),
             state: state,
             summary: summaryParts.joined(separator: " · "),
@@ -194,30 +236,51 @@ final class AgentSessionStore: ObservableObject {
         )
     }
 
-    private func makeSession(from discovered: CodexDiscoveredSession) -> AgentSession {
-        AgentSession(
+    private func makeSession(
+        from discovered: CodexDiscoveredSession,
+        cmuxIndex: CmuxLocationIndex
+    ) -> AgentSession {
+        let cmuxLocation = cmuxIndex.locateCodex()
+        let terminalTarget = cmuxLocation.map(makeCmuxTerminalTarget) ?? TerminalTarget(
+            appName: "Codex",
+            bundleID: "com.openai.codex",
+            processID: nil,
+            windowID: nil,
+            windowTitle: nil,
+            tabTitle: nil,
+            workspaceID: nil,
+            surfaceID: nil,
+            socketPath: nil,
+            threadID: discovered.id
+        )
+
+        return AgentSession(
             id: discovered.id,
             title: discovered.title,
             agent: .codex,
-            terminal: "Codex",
-            terminalTarget: TerminalTarget(
-                appName: "Codex",
-                bundleID: "com.openai.codex",
-                processID: nil,
-                windowID: nil,
-                windowTitle: nil,
-                tabTitle: nil,
-                workspaceID: nil,
-                surfaceID: nil,
-                socketPath: nil,
-                threadID: discovered.id
-            ),
+            terminal: terminalTarget.displayName,
+            terminalTarget: terminalTarget,
             elapsed: relativeTime(from: discovered.updatedAt),
             state: .idle,
             summary: "Codex session",
             events: [],
             cwd: nil,
             branch: nil
+        )
+    }
+
+    private func makeCmuxTerminalTarget(_ location: CmuxAgentLocation) -> TerminalTarget {
+        TerminalTarget(
+            appName: "cmux",
+            bundleID: "com.cmuxterm.app",
+            processID: Int32(location.rootPID),
+            windowID: nil,
+            windowTitle: nil,
+            tabTitle: location.title,
+            workspaceID: location.workspaceUUID.isEmpty ? nil : location.workspaceUUID,
+            surfaceID: location.surfaceUUID.isEmpty ? nil : location.surfaceUUID,
+            socketPath: nil,
+            threadID: nil
         )
     }
 
