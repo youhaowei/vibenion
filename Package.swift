@@ -10,19 +10,12 @@ let package = Package(
     products: [
         .executable(name: "Vibenion", targets: ["Vibenion"])
     ],
-    dependencies: [
-        .package(url: "https://github.com/krzysztofzablocki/Inject.git", from: "1.6.0")
-    ],
+    dependencies: [],
     targets: [
         .executableTarget(
             name: "Vibenion",
-            dependencies: [
-                .product(name: "Inject", package: "Inject")
-            ],
-            path: "Sources/Vibenion",
-            linkerSettings: [
-                .unsafeFlags(["-Xlinker", "-interposable"], .when(configuration: .debug))
-            ]
+            dependencies: [],
+            path: "Sources/Vibenion"
         ),
         .testTarget(
             name: "VibenionTests",

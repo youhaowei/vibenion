@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'usage: vibenion-event <session_id> <agent> <state> <summary> [title] [terminal] [elapsed] [message]' >&2
+  echo 'usage: vibenion-event <session_id> <agent> <state> <summary> [title] [terminal] [elapsed] [message] [terminal_metadata_json]' >&2
   exit 2
 }
 
@@ -20,7 +20,7 @@ import sys
 
 session_id, agent, state, summary = sys.argv[1:5]
 optional = sys.argv[5:]
-keys = ["title", "terminal", "elapsed", "message"]
+keys = ["title", "terminal", "elapsed", "message", "terminal_metadata"]
 
 event = {
     "session_id": session_id,
@@ -31,7 +31,7 @@ event = {
 
 for key, value in zip(keys, optional):
     if value:
-        event[key] = value
+        event[key] = json.loads(value) if key == "terminal_metadata" else value
 
 print(json.dumps(event, separators=(",", ":")))
 PY

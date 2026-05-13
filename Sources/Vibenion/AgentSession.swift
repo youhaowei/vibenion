@@ -47,6 +47,7 @@ struct AgentSession: Identifiable, Equatable, Sendable {
     var title: String
     var agent: AgentKind
     var terminal: String
+    var terminalTarget: TerminalTarget?
     var elapsed: String
     var state: SessionState
     var summary: String
@@ -180,6 +181,7 @@ final class AgentSessionStore: ObservableObject {
             title: title,
             agent: .claude,
             terminal: "Claude Code",
+            terminalTarget: nil,
             elapsed: relativeTime(from: metadata.updatedAt ?? metadata.startedAt),
             state: state,
             summary: summaryParts.joined(separator: " · "),
@@ -198,6 +200,18 @@ final class AgentSessionStore: ObservableObject {
             title: discovered.title,
             agent: .codex,
             terminal: "Codex",
+            terminalTarget: TerminalTarget(
+                appName: "Codex",
+                bundleID: "com.openai.codex",
+                processID: nil,
+                windowID: nil,
+                windowTitle: nil,
+                tabTitle: nil,
+                workspaceID: nil,
+                surfaceID: nil,
+                socketPath: nil,
+                threadID: discovered.id
+            ),
             elapsed: relativeTime(from: discovered.updatedAt),
             state: .idle,
             summary: "Codex session",
@@ -279,6 +293,7 @@ final class AgentSessionStore: ObservableObject {
             sessions[index].title = event.title ?? sessions[index].title
             sessions[index].agent = agent
             sessions[index].terminal = event.terminal ?? sessions[index].terminal
+            sessions[index].terminalTarget = event.terminalTarget ?? sessions[index].terminalTarget
             sessions[index].elapsed = event.elapsed ?? sessions[index].elapsed
             sessions[index].state = state
             sessions[index].summary = event.summary
@@ -290,6 +305,7 @@ final class AgentSessionStore: ObservableObject {
                     title: event.title ?? event.sessionID,
                     agent: agent,
                     terminal: event.terminal ?? "Terminal",
+                    terminalTarget: event.terminalTarget,
                     elapsed: event.elapsed ?? "now",
                     state: state,
                     summary: event.summary,
@@ -323,6 +339,7 @@ extension AgentSession {
             title: "codex/hot-reload",
             agent: .codex,
             terminal: "Codex",
+            terminalTarget: nil,
             elapsed: "4m",
             state: .running,
             summary: "Wiring SwiftUI preview flow",
@@ -335,6 +352,7 @@ extension AgentSession {
             title: "Claude UI pass",
             agent: .claude,
             terminal: "Claude Code",
+            terminalTarget: nil,
             elapsed: "12m",
             state: .needsApproval,
             summary: "Waiting for approval on panel placement",
@@ -347,6 +365,7 @@ extension AgentSession {
             title: "Settings cleanup",
             agent: .cursor,
             terminal: "Cursor",
+            terminalTarget: nil,
             elapsed: "1h",
             state: .done,
             summary: "Finished small settings copy pass",

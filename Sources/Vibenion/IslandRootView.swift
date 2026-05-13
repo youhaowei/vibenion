@@ -1,7 +1,4 @@
 import AppKit
-#if DEBUG
-import Inject
-#endif
 import SwiftUI
 
 struct NotchGeometry: Equatable {
@@ -25,12 +22,10 @@ struct IslandRootView: View {
     @ObservedObject var store: AgentSessionStore
     @ObservedObject var presentation: IslandPresentation
     var notch: NotchGeometry
+    var terminalFocus: TerminalFocusing = TerminalFocusService.shared
     @State private var selectedID: AgentSession.ID?
     @State private var isHovering = false
     @State private var lastHoverHapticAt = Date.distantPast
-#if DEBUG
-    @ObserveInjection var inject
-#endif
 
     private var selectedSession: AgentSession? {
         if let selectedID, let session = store.sessions.first(where: { $0.id == selectedID }) {
@@ -91,9 +86,6 @@ struct IslandRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea()
-#if DEBUG
-        .enableInjection()
-#endif
     }
 
     private var island: some View {
@@ -212,15 +204,26 @@ struct IslandRootView: View {
             ScrollView {
                 LazyVStack(spacing: 6) {
                     ForEach(store.sessions) { session in
-                        Button {
-                            selectedID = session.id
-                        } label: {
-                            SessionRow(
-                                session: session,
-                                isSelected: selectedSession?.id == session.id
-                            )
+                        SessionRow(
+                            session: session,
+                            isSelected: selectedSession?.id == session.id,
+                            onSelect: {
+                                selectedID = session.id
+                            },
+                            onJump: {
+                                terminalFocus.focusTerminal(for: session)
+                            }
+                        )
+                        .simultaneousGesture(
+                            TapGesture(count: 2).onEnded {
+                                terminalFocus.focusTerminal(for: session)
+                            }
+                        )
+                        .contextMenu {
+                            Button("Jump to terminal") {
+                                terminalFocus.focusTerminal(for: session)
+                            }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.vertical, 2)
@@ -249,9 +252,8 @@ struct IslandRootView: View {
 private struct SessionRow: View {
     let session: AgentSession
     let isSelected: Bool
-#if DEBUG
-    @ObserveInjection var inject
-#endif
+    let onSelect: () -> Void
+    let onJump: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -283,15 +285,24 @@ private struct SessionRow: View {
 
                 contextLine
             }
+
+            Button(action: onJump) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .frame(width: 24, height: 24)
+                    .background(.white.opacity(0.08), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Jump to terminal")
+            .padding(.top, 1)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
         .background(isSelected ? .white.opacity(0.08) : .clear)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-#if DEBUG
-        .enableInjection()
-#endif
+        .onTapGesture(perform: onSelect)
     }
 
     private var contextLine: some View {
@@ -316,9 +327,6 @@ private struct SessionRow: View {
 
 private struct AgentBadge: View {
     let agent: AgentKind
-#if DEBUG
-    @ObserveInjection var inject
-#endif
 
     var body: some View {
         HStack(spacing: 4) {
@@ -334,9 +342,6 @@ private struct AgentBadge: View {
         .background(color.opacity(0.22))
         .foregroundStyle(color)
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-#if DEBUG
-        .enableInjection()
-#endif
     }
 
     private var mark: String {
@@ -362,9 +367,6 @@ private struct AgentBadge: View {
 
 private struct StateBadge: View {
     let state: SessionState
-#if DEBUG
-    @ObserveInjection var inject
-#endif
 
     var body: some View {
         Text(state.rawValue.uppercased())
@@ -374,9 +376,6 @@ private struct StateBadge: View {
             .background(color.opacity(0.18))
             .foregroundStyle(color)
             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-#if DEBUG
-            .enableInjection()
-#endif
     }
 
     private var color: Color {
@@ -396,9 +395,6 @@ private struct BrandSpark: View {
     let state: SessionState
 
     @State private var pulse = false
-#if DEBUG
-    @ObserveInjection var inject
-#endif
 
     var body: some View {
         Image(systemName: "sparkles")
@@ -413,9 +409,6 @@ private struct BrandSpark: View {
                     }
                 }
             }
-#if DEBUG
-            .enableInjection()
-#endif
     }
 
     private var shouldPulse: Bool {
@@ -442,9 +435,6 @@ private struct StatusDot: View {
     let state: SessionState
 
     @State private var pulsing = false
-#if DEBUG
-    @ObserveInjection var inject
-#endif
 
     var body: some View {
         Circle()
@@ -463,9 +453,6 @@ private struct StatusDot: View {
                     }
                 }
             }
-#if DEBUG
-            .enableInjection()
-#endif
     }
 
     private var shouldPulse: Bool {

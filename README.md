@@ -30,7 +30,7 @@ swift run Vibenion
 - Running/idle/stale/done state mapping
 - Repo and branch context from session `cwd`
 - Approval and question action placeholders
-- Jump-to-terminal placeholder
+- Jump-to-terminal targeting from session event metadata
 - Local JSONL event ingestion from `~/.vibenion/events.jsonl`
 
 ## Claude Session Discovery
@@ -59,6 +59,35 @@ Append one JSON object per line:
 {"session_id":"codex-api","agent":"codex","state":"running","summary":"Running tests","title":"api cleanup","terminal":"Terminal","elapsed":"2m","message":"bun test started"}
 ```
 
+For exact jump-back behavior, include `terminal_metadata` with the terminal app
+and window identity:
+
+```json
+{"session_id":"codex-api","agent":"codex","state":"running","summary":"Running tests","title":"api cleanup","terminal":"Ghostty","terminal_metadata":{"app_name":"Ghostty","bundle_id":"com.mitchellh.ghostty","pid":9123,"window_id":77,"window_title":"vibenion"}}
+```
+
+For cmux, include workspace/surface metadata so Vibenion can select the exact pane:
+
+```json
+{"session_id":"codex-api","agent":"codex","state":"running","summary":"Running tests","title":"api cleanup","terminal":"cmux","terminal_metadata":{"workspace_id":"workspace:2","surface_id":"surface:4","socket_path":"/tmp/cmux.sock"}}
+```
+
+For Codex Desktop, Vibenion uses the Codex thread id from discovery or
+`terminal_metadata.thread_id` to open the app's local-conversation deep link:
+`codex://local/<thread_id>`. If the deep link cannot be opened, it falls back to
+focusing Codex and trying the local app-server/visible-sidebar paths.
+
+```json
+{"session_id":"019e0850-8f41-7e90-b6c9-a67946f7b2a7","agent":"codex","state":"running","summary":"Running tests","title":"api cleanup","terminal":"Codex","terminal_metadata":{"bundle_id":"com.openai.codex","thread_id":"019e0850-8f41-7e90-b6c9-a67946f7b2a7"}}
+```
+
+Supported terminal app bundle IDs:
+
+- Ghostty: `com.mitchellh.ghostty`
+- iTerm2: `com.googlecode.iterm2`
+- Terminal: `com.apple.Terminal`
+- Codex App: `com.openai.codex`
+
 States:
 
 - `running`
@@ -70,13 +99,14 @@ Helper script:
 
 ```sh
 scripts/vibenion-event codex-api codex running "Running tests" "api cleanup" Terminal 2m "bun test started"
+scripts/vibenion-event codex-api codex running "Running tests" "api cleanup" Ghostty 2m "bun test started" '{"bundle_id":"com.mitchellh.ghostty","window_id":77}'
+scripts/vibenion-event codex-api codex running "Running tests" "api cleanup" cmux 2m "bun test started" '{"workspace_id":"workspace:2","surface_id":"surface:4"}'
 scripts/vibenion-event codex-api codex approval "Approve edit in src/server.ts" "api cleanup" Terminal 3m "Patch pending"
 scripts/vibenion-event codex-api codex done "Tests passed" "api cleanup" Terminal 5m "Ready for review"
 ```
 
 ## Next
 
-- Terminal window targeting
 - Codex session discovery
 - Ambient pet attention surface
 - Real approval/question bridge
