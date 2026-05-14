@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Vibenion · session row playground</title>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0b0d;
+    --panel: #111114;
+    --line: rgba(255,255,255,0.06);
+    --text: #f4f4f5;
+    --dim: rgba(255,255,255,0.55);
+    --dim2: rgba(255,255,255,0.35);
+    --mint: #4fd9b4;
+    --orange: #ff9a3c;
+    --yellow: #f7d75e;
+    --red: #ff6b6b;
+    --green: #59d97a;
+    --blue: #76bdff;
+    --gray: #8c8c93;
+    --claude: #d16b42;
+    --codex: #4fd9b4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.4 -apple-system, "SF Pro Text", system-ui, sans-serif;
+    margin: 0;
+    padding: 40px;
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 32px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 14px; font-weight: 700; margin: 0 0 12px; }
+  h2 { font-size: 11px; font-weight: 700; margin: 24px 0 8px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); }
+  .controls { position: sticky; top: 40px; align-self: start; }
+  .controls fieldset {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px 14px;
+    margin: 0 0 12px;
+  }
+  .controls legend { padding: 0 6px; font-size: 11px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; }
+  .controls label { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; }
+  .controls label .preview { margin-left: auto; color: var(--mint); display: inline-flex; }
+  .stage {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 8px;
+    max-width: 560px;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 24px 1fr auto;
+    align-items: start;
+    gap: 10px;
+    padding: 10px 10px;
+    border-radius: 10px;
+  }
+  .row + .row { margin-top: 2px; }
+  .row:hover { background: rgba(255,255,255,0.04); }
+  .glyph {
+    width: 18px; height: 18px;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-top: 1px;
+  }
+  .glyph svg { width: 16px; height: 16px; stroke-width: 2; }
+  .body { min-width: 0; }
+  .titleline { display: flex; align-items: baseline; gap: 8px; }
+  .identity { font-weight: 700; font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .branch { color: var(--dim); font-weight: 500; }
+  .meta { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .verb { font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .agent { font-size: 11px; font-weight: 800; width: 12px; text-align: center; }
+  .agent.claude { color: var(--claude); }
+  .agent.codex  { color: var(--codex); }
+  .summary { font-size: 12px; color: rgba(255,255,255,0.72); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .jump {
+    display: inline-flex; align-items: center; gap: 4px;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.07);
+    color: rgba(255,255,255,0.7);
+    font-size: 10.5px; font-weight: 600;
+    margin-top: 1px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .jump:hover { background: rgba(255,255,255,0.12); color: white; }
+  .jump svg { width: 11px; height: 11px; }
+
+  .v-asking  { color: var(--orange); }
+  .v-working { color: var(--mint); }
+  .v-ready   { color: var(--blue); }
+  .v-idle    { color: var(--gray); }
+  .v-done    { color: var(--green); }
+  .v-error   { color: var(--red); }
+  .g-asking  { color: var(--orange); }
+  .g-working { color: var(--mint); }
+  .g-ready   { color: var(--blue); }
+  .g-idle    { color: var(--gray); }
+  .g-done    { color: var(--green); }
+  .g-error   { color: var(--red); }
+
+  .pulse svg { animation: pulse 1.6s ease-in-out infinite; transform-origin: center; }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.55; transform: scale(0.96); }
+    50%      { opacity: 1.0;  transform: scale(1.06); }
+  }
+  .spin svg { animation: spin 1.2s linear infinite; transform-origin: center; transform-box: fill-box; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .blink svg { animation: blink 1.2s ease-in-out infinite; }
+  @keyframes blink {
+    0%, 100% { opacity: 0.4; }
+    50%      { opacity: 1.0; }
+  }
+
+  .ref {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    gap: 8px 18px;
+    font-size: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-top: 12px;
+  }
+  .ref .glyph { width: 20px; height: 20px; }
+  .ref .glyph svg { width: 18px; height: 18px; }
+  .ref code { color: var(--dim); font-size: 11px; }
+  .note { color: var(--dim); font-size: 11px; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<aside class="controls">
+  <h1>Session row playground</h1>
+  <p class="note">Pick the working-state icon that reads best. All rows below render the same data; only the working icon and its animation change.</p>
+
+  <fieldset>
+    <legend>Working icon</legend>
+    <label><input type="radio" name="working" value="loader-2" checked /> loader-2 (spinner) <span class="preview" data-lucide="loader-2"></span></label>
+    <label><input type="radio" name="working" value="loader-circle" /> loader-circle <span class="preview" data-lucide="loader-circle"></span></label>
+    <label><input type="radio" name="working" value="ellipsis" /> ellipsis (typing) <span class="preview" data-lucide="ellipsis"></span></label>
+    <label><input type="radio" name="working" value="refresh-cw" /> refresh-cw <span class="preview" data-lucide="refresh-cw"></span></label>
+    <label><input type="radio" name="working" value="audio-waveform" /> audio-waveform <span class="preview" data-lucide="audio-waveform"></span></label>
+    <label><input type="radio" name="working" value="activity" /> activity <span class="preview" data-lucide="activity"></span></label>
+    <label><input type="radio" name="working" value="zap" /> zap (bolt) <span class="preview" data-lucide="zap"></span></label>
+    <label><input type="radio" name="working" value="cpu" /> cpu <span class="preview" data-lucide="cpu"></span></label>
+    <label><input type="radio" name="working" value="circle-dashed" /> circle-dashed (current) <span class="preview" data-lucide="circle-dashed"></span></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Working animation</legend>
+    <label><input type="radio" name="anim" value="spin" checked /> spin (rotate)</label>
+    <label><input type="radio" name="anim" value="pulse" /> pulse (scale + fade)</label>
+    <label><input type="radio" name="anim" value="blink" /> blink (fade only)</label>
+    <label><input type="radio" name="anim" value="none" /> none</label>
+  </fieldset>
+
+  <p class="note">SF Symbols equivalents (approx):<br/>
+  loader-2 ≈ <code>progress.indicator</code><br/>
+  ellipsis ≈ <code>ellipsis</code><br/>
+  refresh-cw ≈ <code>arrow.triangle.2.circlepath</code><br/>
+  audio-waveform ≈ <code>waveform</code><br/>
+  activity ≈ <code>waveform.path</code><br/>
+  zap ≈ <code>bolt.fill</code><br/>
+  cpu ≈ <code>cpu.fill</code><br/>
+  circle-dashed ≈ <code>circle.dotted</code></p>
+</aside>
+
+<main>
+  <h2>Live row preview</h2>
+  <div class="stage" id="stage">
+
+    <!-- Asking -->
+    <div class="row">
+      <span class="glyph g-asking pulse" data-lucide="hand"></span>
+      <div class="body">
+        <div class="titleline">
+          <span class="identity">vibenion <span class="branch">· master</span></span>
+          <span class="meta">
+            <span class="verb v-asking">asking · 12s</span>
+            <span class="agent claude">✶</span>
+          </span>
+        </div>
+        <div class="summary">Run git push --force-with-lease ?</div>
+      </div>
+      <span class="jump">cmux <span data-lucide="arrow-up-right"></span></span>
+    </div>
+
+    <!-- Working -->
+    <div class="row">
+      <span class="glyph g-working spin" id="workingGlyph" data-lucide="loader-2"></span>
+      <div class="body">
+        <div class="titleline">
+          <span class="identity">wystack-plugins</span>
+          <span class="meta">
+            <span class="verb v-working">working · 4m</span>
+            <span class="agent claude">✶</span>
+          </span>
+        </div>
+        <div class="summary">Editing IslandRootView.swift</div>
+      </div>
+      <span class="jump">cmux <span data-lucide="arrow-up-right"></span></span>
+    </div>
+
+    <!-- Ready -->
+    <div class="row">
+      <span class="glyph g-ready" data-lucide="circle"></span>
+      <div class="body">
+        <div class="titleline">
+          <span class="identity">workforce</span>
+          <span class="meta">
+            <span class="verb v-ready">ready · 2m</span>
+            <span class="agent claude">✶</span>
+          </span>
+        </div>
+        <div class="summary"></div>
+      </div>
+      <span class="jump">cmux <span data-lucide="arrow-up-right"></span></span>
+    </div>
+
+    <!-- Idle -->
+    <div class="row">
+      <span class="glyph g-idle" data-lucide="moon"></span>
+      <div class="body">
+        <div class="titleline">
+          <span class="identity">workforce <span class="branch">· feature-x</span></span>
+          <span class="meta">
+            <span class="verb v-idle">idle · 20h</span>
+            <span class="agent claude">✶</span>
+          </span>
+        </div>
+        <div class="summary"></div>
+      </div>
+      <span class="jump">cmux <span data-lucide="arrow-up-right"></span></span>
+    </div>
+
+    <!-- Codex working -->
+    <div class="row">
+      <span class="glyph g-working spin" id="workingGlyph2" data-lucide="loader-2"></span>
+      <div class="body">
+        <div class="titleline">
+          <span class="identity">thread-3a9</span>
+          <span class="meta">
+            <span class="verb v-working">working · 1m</span>
+            <span class="agent codex">⌘</span>
+          </span>
+        </div>
+        <div class="summary">Drafting plan for migration step</div>
+      </div>
+      <span class="jump">Codex <span data-lucide="arrow-up-right"></span></span>
+    </div>
+
+    <!-- Error -->
+    <div class="row">
+      <span class="glyph g-error" data-lucide="triangle-alert"></span>
+      <div class="body">
+        <div class="titleline">
+          <span class="identity">vibenion-tests</span>
+          <span class="meta">
+            <span class="verb v-error">error · 30s</span>
+            <span class="agent claude">✶</span>
+          </span>
+        </div>
+        <div class="summary">swift build failed: Cannot find type 'StateGlyph'</div>
+      </div>
+      <span class="jump">cmux <span data-lucide="arrow-up-right"></span></span>
+    </div>
+
+    <!-- Done -->
+    <div class="row">
+      <span class="glyph g-done" data-lucide="circle-check"></span>
+      <div class="body">
+        <div class="titleline">
+          <span class="identity">scratch</span>
+          <span class="meta">
+            <span class="verb v-done">done · 5m</span>
+            <span class="agent codex">⌘</span>
+          </span>
+        </div>
+        <div class="summary">Tests passing</div>
+      </div>
+      <span class="jump">Codex <span data-lucide="arrow-up-right"></span></span>
+    </div>
+
+  </div>
+
+  <h2>All working-icon candidates (spinning)</h2>
+  <div class="ref" id="refGrid"></div>
+</main>
+
+<script>
+  const workingIcons = [
+    ['loader-2',       'Apple-style spinner'],
+    ['loader-circle',  'open arc'],
+    ['ellipsis',       'typing / thinking'],
+    ['refresh-cw',     'loop / refresh'],
+    ['audio-waveform', 'audio activity'],
+    ['activity',       'heartbeat'],
+    ['zap',            'bolt'],
+    ['cpu',            'processing chip'],
+    ['circle-dashed',  'current — dotted ring'],
+  ];
+
+  const refGrid = document.getElementById('refGrid');
+  for (const [name, label] of workingIcons) {
+    const a = document.createElement('span');
+    a.className = 'glyph g-working spin';
+    a.setAttribute('data-lucide', name);
+    const b = document.createElement('code');
+    b.textContent = name;
+    const c = document.createElement('span');
+    c.textContent = label;
+    refGrid.append(a, b, c);
+  }
+
+  function refresh() {
+    const icon = document.querySelector('input[name=working]:checked').value;
+    const anim = document.querySelector('input[name=anim]:checked').value;
+    for (const id of ['workingGlyph', 'workingGlyph2']) {
+      const el = document.getElementById(id);
+      // Recreate the placeholder so lucide re-renders this slot.
+      const fresh = document.createElement('span');
+      fresh.id = id;
+      fresh.className = 'glyph g-working' + (anim === 'none' ? '' : ' ' + anim);
+      fresh.setAttribute('data-lucide', icon);
+      el.replaceWith(fresh);
+    }
+    lucide.createIcons();
+  }
+
+  document.querySelectorAll('input[name=working], input[name=anim]').forEach(el => {
+    el.addEventListener('change', refresh);
+  });
+
+  lucide.createIcons();
+</script>
+</body>
+</html>

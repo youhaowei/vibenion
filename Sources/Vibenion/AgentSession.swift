@@ -21,23 +21,26 @@ enum AgentKind: String, CaseIterable, Identifiable, Sendable {
 }
 
 enum SessionState: String, Sendable {
-    case running = "Running"
+    case asking = "Asking"
+    case working = "Working"
+    case ready = "Ready"
     case idle = "Idle"
-    case stale = "Stale"
-    case needsApproval = "Needs approval"
-    case question = "Question"
     case done = "Done"
-    case error = "Error"
 
     init(eventValue: String) {
         switch eventValue.lowercased() {
-        case "approval", "needs_approval", "needs-approval": self = .needsApproval
-        case "question", "ask": self = .question
-        case "done", "complete", "completed": self = .done
-        case "idle": self = .idle
-        case "stale": self = .stale
-        case "error", "failed", "blocked": self = .error
-        default: self = .running
+        case "approval", "needs_approval", "needs-approval",
+             "question", "ask",
+             "error", "failed", "blocked":
+            self = .asking
+        case "awaiting", "ready", "awaiting_input":
+            self = .ready
+        case "idle", "stale":
+            self = .idle
+        case "done", "complete", "completed":
+            self = .done
+        default:
+            self = .working
         }
     }
 }
@@ -54,9 +57,37 @@ struct AgentSession: Identifiable, Equatable, Sendable {
     var events: [String]
     var cwd: String?
     var branch: String?
+    var acknowledgedAt: Date?
+    var lastActivityAt: Date?
+
+    var isStale: Bool {
+        guard let lastActivityAt else { return false }
+        return Date().timeIntervalSince(lastActivityAt) > 2 * 3600
+    }
 
     var needsHuman: Bool {
-        state == .needsApproval || state == .question || state == .error
+        state == .asking || state == .ready
+    }
+
+    var needsAttention: Bool {
+        needsHuman && acknowledgedAt == nil
+    }
+
+    enum Group {
+        case attention
+        case running
+        case idleOrDone
+    }
+
+    var group: Group {
+        if needsAttention { return .attention }
+        switch state {
+        case .working: return .running
+        // Acknowledged `.ready`/`.asking` are still actively waiting on the user —
+        // keep them visible in `running`, just out of the attention bucket.
+        case .asking, .ready: return .running
+        case .idle, .done: return .idleOrDone
+        }
     }
 }
 
@@ -91,6 +122,35 @@ private struct DiscoveredAgentSessions: Sendable {
     let claude: [ClaudeDiscoveredSession]
     let codex: [CodexDiscoveredSession]
     let cmuxLocations: [CmuxAgentLocation]
+}
+
+enum CodexSessionStateMapper {
+    static func state(for session: CodexDiscoveredSession, now: Date = Date()) -> SessionState {
+        // Codex Desktop can report a loaded/current thread as "active" even
+        // when it is not currently producing output. Only explicit wait flags
+        // should become human-attention states; otherwise use freshness.
+        if let statusType = session.statusType {
+            switch statusType {
+            case "active":
+                let flags = Set(session.activeFlags ?? [])
+                if flags.contains("waitingOnApproval") { return .asking }
+                if flags.contains("waitingOnUserInput") { return .ready }
+                return freshnessState(updatedAt: session.updatedAt, now: now)
+            case "idle":
+                return .idle
+            case "systemError":
+                return .done
+            default:
+                break
+            }
+        }
+
+        return freshnessState(updatedAt: session.updatedAt, now: now)
+    }
+
+    private static func freshnessState(updatedAt: Date, now: Date) -> SessionState {
+        now.timeIntervalSince(updatedAt) < 30 ? .working : .idle
+    }
 }
 
 @MainActor
@@ -138,12 +198,18 @@ final class AgentSessionStore: ObservableObject {
     }
 
     var activeSession: AgentSession? {
-        sessions.first(where: \.needsHuman) ?? sessions.first
+        sessions.first(where: \.needsAttention) ?? sessions.first(where: \.needsHuman) ?? sessions.first
+    }
+
+    func acknowledge(_ session: AgentSession) {
+        update(session) { item in
+            item.acknowledgedAt = Date()
+        }
     }
 
     func allow(_ session: AgentSession) {
         update(session) { item in
-            item.state = .running
+            item.state = .working
             item.summary = "Approved. Continuing work."
             item.events.append("Approved from Vibenion")
         }
@@ -159,7 +225,7 @@ final class AgentSessionStore: ObservableObject {
 
     func answer(_ session: AgentSession, option: String) {
         update(session) { item in
-            item.state = .running
+            item.state = .working
             item.summary = "Answered: \(option)"
             item.events.append("Selected \(option)")
         }
@@ -191,12 +257,36 @@ final class AgentSessionStore: ObservableObject {
 
     private func loadDiscoveredSessions(_ discovered: DiscoveredAgentSessions) {
         let cmuxIndex = CmuxLocationIndex(locations: discovered.cmuxLocations)
-        let claudeSessions = discovered.claude.map { makeSession(from: $0, cmuxIndex: cmuxIndex) }
-        let codexSessions = discovered.codex.map { makeSession(from: $0, cmuxIndex: cmuxIndex) }
-        let discoveredSessions = claudeSessions + codexSessions
+        let claudeSessions = discovered.claude
+            .map { makeSession(from: $0, cmuxIndex: cmuxIndex) }
+            .filter { isLiveSession($0) }
+        let hasCmuxCodex = cmuxIndex.locateCodex() != nil
+        let codexSessions = discovered.codex
+            .filter { codexShouldShow($0, hasCmux: hasCmuxCodex) }
+            .map { makeSession(from: $0, cmuxIndex: cmuxIndex) }
+            .filter { isLiveSession($0) }
+        var unique: [String: AgentSession] = [:]
+        for session in claudeSessions + codexSessions {
+            unique[session.id] = session
+        }
+        let existingByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let discoveredSessions = unique.values.map { fresh -> AgentSession in
+            guard let prior = existingByID[fresh.id] else { return fresh }
+            var merged = fresh
+            merged.acknowledgedAt = prior.state == fresh.state ? prior.acknowledgedAt : nil
+            return merged
+        }
         let discoveredIDs = Set(discoveredSessions.map(\.id))
         let manualSessions = sessions.filter { !discoveredIDs.contains($0.id) }
         sessions = sortSessions(discoveredSessions + manualSessions)
+    }
+
+    private func isLiveSession(_ session: AgentSession) -> Bool {
+        guard session.terminalTarget != nil else { return false }
+        switch session.state {
+        case .done: return false
+        case .asking, .working, .ready, .idle: return true
+        }
     }
 
     private func makeSession(
@@ -204,15 +294,13 @@ final class AgentSessionStore: ObservableObject {
         cmuxIndex: CmuxLocationIndex
     ) -> AgentSession {
         let metadata = discovered.metadata
-        let state = mapClaudeState(metadata: metadata, isProcessAlive: discovered.isProcessAlive)
+        let state = mapClaudeState(
+            metadata: metadata,
+            isProcessAlive: discovered.isProcessAlive,
+            transcriptModifiedAt: discovered.transcriptModifiedAt
+        )
         let title = metadata.name ?? discovered.repo.name
         let branch = discovered.repo.branch
-        let summaryParts = [
-            state == .done ? "Claude session" : "Claude Code \(metadata.status)",
-            branch.map { "on \($0)" },
-            discovered.messageCount.map { "\($0) messages" },
-            metadata.version.map { "v\($0)" },
-        ].compactMap(\.self)
         let pidEvent = metadata.pid.map { "pid: \($0)" }
         let cmuxLocation = cmuxIndex.locateClaude(pid: metadata.pid)
         let terminalTarget = cmuxLocation.map(makeCmuxTerminalTarget)
@@ -226,14 +314,26 @@ final class AgentSessionStore: ObservableObject {
             terminalTarget: terminalTarget,
             elapsed: relativeTime(from: metadata.updatedAt ?? metadata.startedAt),
             state: state,
-            summary: summaryParts.joined(separator: " · "),
+            summary: "",
             events: [
                 "cwd: \(metadata.cwd)",
                 pidEvent,
             ].compactMap(\.self),
             cwd: metadata.cwd,
-            branch: branch
+            branch: branch,
+            acknowledgedAt: nil,
+            lastActivityAt: claudeLastActivity(metadata: metadata, transcript: discovered.transcriptModifiedAt)
         )
+    }
+
+    private func claudeLastActivity(metadata: ClaudeSessionMetadata, transcript: Date?) -> Date? {
+        let metaDate = (metadata.updatedAt ?? metadata.startedAt).map { Date(timeIntervalSince1970: $0 / 1000) }
+        switch (transcript, metaDate) {
+        case let (t?, m?): return max(t, m)
+        case let (t?, nil): return t
+        case let (nil, m?): return m
+        case (nil, nil): return nil
+        }
     }
 
     private func makeSession(
@@ -253,6 +353,7 @@ final class AgentSessionStore: ObservableObject {
             socketPath: nil,
             threadID: discovered.id
         )
+        let state = mapCodexState(session: discovered)
 
         return AgentSession(
             id: discovered.id,
@@ -261,12 +362,27 @@ final class AgentSessionStore: ObservableObject {
             terminal: terminalTarget.displayName,
             terminalTarget: terminalTarget,
             elapsed: relativeTime(from: discovered.updatedAt),
-            state: .idle,
-            summary: "Codex session",
+            state: state,
+            summary: discovered.preview ?? "",
             events: [],
-            cwd: nil,
-            branch: nil
+            cwd: discovered.cwd,
+            branch: discovered.branch,
+            acknowledgedAt: nil,
+            lastActivityAt: discovered.updatedAt
         )
+    }
+
+    private func codexShouldShow(_ session: CodexDiscoveredSession, hasCmux: Bool) -> Bool {
+        // Cmux Codex tab open → show recent threads liberally.
+        if hasCmux { return true }
+        // Loaded in Codex Desktop → live, always show.
+        if session.isLoaded { return true }
+        // Otherwise treat like Claude: short recency window.
+        return Date().timeIntervalSince(session.updatedAt) < 4 * 3600
+    }
+
+    private func mapCodexState(session: CodexDiscoveredSession) -> SessionState {
+        CodexSessionStateMapper.state(for: session)
     }
 
     private func makeCmuxTerminalTarget(_ location: CmuxAgentLocation) -> TerminalTarget {
@@ -286,19 +402,24 @@ final class AgentSessionStore: ObservableObject {
 
     private func mapClaudeState(
         metadata: ClaudeSessionMetadata,
-        isProcessAlive: Bool?
+        isProcessAlive: Bool?,
+        transcriptModifiedAt: Date?
     ) -> SessionState {
         guard isProcessAlive ?? false else { return .done }
 
-        let ageSeconds = Date().timeIntervalSince1970 - ((metadata.updatedAt ?? 0) / 1000)
-        if metadata.status == "busy", ageSeconds > 15 * 60 {
-            return .stale
+        if let transcriptModifiedAt, Date().timeIntervalSince(transcriptModifiedAt) < 5 {
+            return .working
         }
 
+        let ageSeconds = Date().timeIntervalSince1970 - ((metadata.updatedAt ?? 0) / 1000)
+
         switch metadata.status.lowercased() {
-        case "busy": return .running
-        case "idle": return .idle
-        default: return .running
+        case "busy":
+            return ageSeconds > 15 * 60 ? .idle : .working
+        case "idle":
+            return ageSeconds < 5 * 60 ? .ready : .idle
+        default:
+            return .working
         }
     }
 
@@ -314,7 +435,7 @@ final class AgentSessionStore: ObservableObject {
 
     private func relativeTime(fromSeconds seconds: Int) -> String {
         if seconds < 60 {
-            return "<1m"
+            return "now"
         }
         if seconds < 60 * 60 {
             return "\(seconds / 60)m"
@@ -324,17 +445,18 @@ final class AgentSessionStore: ObservableObject {
 
     private func sortSessions(_ sessions: [AgentSession]) -> [AgentSession] {
         let priority: [SessionState: Int] = [
-            .needsApproval: 0,
-            .question: 0,
-            .error: 1,
-            .running: 2,
-            .stale: 3,
+            .asking: 0,
+            .working: 1,
+            .ready: 2,
+            .idle: 3,
             .done: 4,
-            .idle: 5,
         ]
 
-        return sessions.sorted {
-            (priority[$0.state] ?? 9, $0.title) < (priority[$1.state] ?? 9, $1.title)
+        return sessions.sorted { a, b in
+            if a.needsAttention != b.needsAttention {
+                return a.needsAttention
+            }
+            return (priority[a.state] ?? 9, a.title) < (priority[b.state] ?? 9, b.title)
         }
     }
 
@@ -353,6 +475,9 @@ final class AgentSessionStore: ObservableObject {
         let eventLine = event.message ?? event.summary
 
         if let index = sessions.firstIndex(where: { $0.id == event.sessionID }) {
+            if sessions[index].state != state {
+                sessions[index].acknowledgedAt = nil
+            }
             sessions[index].title = event.title ?? sessions[index].title
             sessions[index].agent = agent
             sessions[index].terminal = event.terminal ?? sessions[index].terminal
@@ -361,14 +486,14 @@ final class AgentSessionStore: ObservableObject {
             sessions[index].state = state
             sessions[index].summary = event.summary
             sessions[index].events.append(eventLine)
-        } else {
+        } else if let target = event.terminalTarget {
             sessions.insert(
                 AgentSession(
                     id: event.sessionID,
                     title: event.title ?? event.sessionID,
                     agent: agent,
-                    terminal: event.terminal ?? "Terminal",
-                    terminalTarget: event.terminalTarget,
+                    terminal: event.terminal ?? target.displayName,
+                    terminalTarget: target,
                     elapsed: event.elapsed ?? "now",
                     state: state,
                     summary: event.summary,
@@ -404,7 +529,7 @@ extension AgentSession {
             terminal: "Codex",
             terminalTarget: nil,
             elapsed: "4m",
-            state: .running,
+            state: .working,
             summary: "Wiring SwiftUI preview flow",
             events: ["Read package manifest", "Added preview fixture"],
             cwd: "/Users/youhaowei/Projects/vibenion",
@@ -417,7 +542,7 @@ extension AgentSession {
             terminal: "Claude Code",
             terminalTarget: nil,
             elapsed: "12m",
-            state: .needsApproval,
+            state: .asking,
             summary: "Waiting for approval on panel placement",
             events: ["Generated island shape", "Needs approval"],
             cwd: "/Users/youhaowei/Projects/vibenion",

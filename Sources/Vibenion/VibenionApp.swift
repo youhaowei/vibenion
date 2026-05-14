@@ -24,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showIsland()
     }
 
+    func applicationDidChangeScreenParameters(_ notification: Notification) {
+        panelController?.screenParametersDidChange()
+    }
+
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "sparkles.rectangle.stack", accessibilityDescription: "Vibenion")

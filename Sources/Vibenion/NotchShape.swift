@@ -6,6 +6,7 @@ import SwiftUI
 struct NotchShape: Shape {
     var topCornerRadius: CGFloat
     var bottomCornerRadius: CGFloat
+    var blendsIntoTopEdge = true
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(topCornerRadius, bottomCornerRadius) }
@@ -19,6 +20,11 @@ struct NotchShape: Shape {
         var path = Path()
         let t = topCornerRadius
         let b = bottomCornerRadius
+
+        guard blendsIntoTopEdge else {
+            path.addRoundedRect(in: rect, cornerSize: CGSize(width: b, height: b))
+            return path
+        }
 
         path.move(to: CGPoint(x: rect.minX, y: rect.minY))
 
@@ -58,8 +64,16 @@ struct NotchShape: Shape {
 }
 
 extension NSScreen {
+    static var preferredIslandScreen: NSScreen {
+        screens.first { $0.isBuiltIn && $0.hasNotch } ?? main ?? builtInOrMain
+    }
+
     static var builtInOrMain: NSScreen {
         screens.first { $0.isBuiltIn } ?? main ?? screens[0]
+    }
+
+    static func screen(containing point: NSPoint) -> NSScreen? {
+        screens.first { $0.frame.contains(point) }
     }
 
     var isBuiltIn: Bool {
@@ -76,7 +90,7 @@ extension NSScreen {
     /// Width × height of the physical notch (or a fallback for non-notched displays).
     var notchSize: CGSize {
         guard hasNotch else {
-            return CGSize(width: 220, height: 36)
+            return CGSize(width: 156, height: 30)
         }
         let leftWidth = auxiliaryTopLeftArea?.width ?? 0
         let rightWidth = auxiliaryTopRightArea?.width ?? 0

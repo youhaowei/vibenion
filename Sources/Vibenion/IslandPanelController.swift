@@ -19,7 +19,7 @@ final class IslandPanelController {
     init(store: AgentSessionStore) {
         self.store = store
 
-        let initialNotch = Self.geometry(for: NSScreen.builtInOrMain)
+        let initialNotch = Self.geometry(for: NSScreen.preferredIslandScreen)
         let rootView = IslandRootView(store: store, presentation: presentation, notch: initialNotch)
         hostingController = NSHostingController(rootView: rootView)
         hostingController.safeAreaRegions = []
@@ -58,8 +58,13 @@ final class IslandPanelController {
         panel.orderOut(nil)
     }
 
+    func screenParametersDidChange() {
+        guard panel.isVisible else { return }
+        positionPanel()
+    }
+
     private func positionPanel() {
-        let screen = NSScreen.builtInOrMain
+        let screen = NSScreen.preferredIslandScreen
         let notch = Self.geometry(for: screen)
         hostingController.rootView = IslandRootView(store: store, presentation: presentation, notch: notch)
 

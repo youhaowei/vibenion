@@ -5,7 +5,7 @@ struct NotchGeometry: Equatable {
     var notchSize: CGSize
     var hasRealNotch: Bool
 
-    static let fallback = NotchGeometry(notchSize: CGSize(width: 220, height: 36), hasRealNotch: false)
+    static let fallback = NotchGeometry(notchSize: CGSize(width: 156, height: 30), hasRealNotch: false)
 }
 
 private enum CornerRadii {
@@ -14,8 +14,10 @@ private enum CornerRadii {
 }
 
 private enum IslandLayout {
-    static let expandedSize = CGSize(width: 540, height: 380)
+    static let expandedWidth: CGFloat = 540
     static let expandedHorizontalPadding: CGFloat = 38
+    static let expandedMinHeight: CGFloat = 120
+    static let expandedMaxHeight: CGFloat = 620
 }
 
 struct IslandRootView: View {
@@ -26,6 +28,7 @@ struct IslandRootView: View {
     @State private var selectedID: AgentSession.ID?
     @State private var isHovering = false
     @State private var lastHoverHapticAt = Date.distantPast
+    @State private var isIdleExpanded = false
 
     private var selectedSession: AgentSession? {
         if let selectedID, let session = store.sessions.first(where: { $0.id == selectedID }) {
@@ -37,7 +40,11 @@ struct IslandRootView: View {
     /// Side overhang past the physical notch — gives content room and lets the pill
     /// visually thicken when collapsed.
     private var sideWidth: CGFloat {
-        max(0, notch.notchSize.height - 12) + 24
+        if notch.hasRealNotch {
+            return max(0, notch.notchSize.height - 12) + 24
+        }
+
+        return 14
     }
 
     private var collapsedSize: CGSize {
@@ -49,15 +56,12 @@ struct IslandRootView: View {
         )
     }
 
-    private var expandedSize: CGSize {
-        CGSize(
-            width: IslandLayout.expandedSize.width + IslandLayout.expandedHorizontalPadding,
-            height: IslandLayout.expandedSize.height
-        )
+    private var expandedWidth: CGFloat {
+        IslandLayout.expandedWidth + IslandLayout.expandedHorizontalPadding
     }
 
-    private var size: CGSize {
-        presentation.isExpanded ? expandedSize : collapsedSize
+    private var width: CGFloat {
+        presentation.isExpanded ? expandedWidth : collapsedSize.width
     }
 
     private var topCornerRadius: CGFloat {
@@ -66,6 +70,10 @@ struct IslandRootView: View {
 
     private var bottomCornerRadius: CGFloat {
         presentation.isExpanded ? CornerRadii.expanded.bottom : CornerRadii.collapsed.bottom
+    }
+
+    private var topInset: CGFloat {
+        notch.hasRealNotch ? 0 : 8
     }
 
     private var expandSpring: Animation { .spring(response: 0.5, dampingFraction: 0.78) }
@@ -89,7 +97,11 @@ struct IslandRootView: View {
     }
 
     private var island: some View {
-        let shape = NotchShape(topCornerRadius: topCornerRadius, bottomCornerRadius: bottomCornerRadius)
+        let shape = NotchShape(
+            topCornerRadius: topCornerRadius,
+            bottomCornerRadius: bottomCornerRadius,
+            blendsIntoTopEdge: notch.hasRealNotch
+        )
 
         return ZStack {
             if presentation.isExpanded {
@@ -103,7 +115,12 @@ struct IslandRootView: View {
                     .transition(.opacity.animation(.easeOut(duration: 0.08)))
             }
         }
-        .frame(width: size.width, height: size.height)
+        .frame(width: width)
+        .frame(
+            minHeight: presentation.isExpanded ? IslandLayout.expandedMinHeight : collapsedSize.height,
+            maxHeight: presentation.isExpanded ? IslandLayout.expandedMaxHeight : collapsedSize.height
+        )
+        .fixedSize(horizontal: false, vertical: true)
         .background(.black, in: shape)
         .shadow(
             color: .black.opacity(presentation.isExpanded ? 0.55 : 0.28),
@@ -111,7 +128,7 @@ struct IslandRootView: View {
             y: presentation.isExpanded ? 10 : (isHovering ? 5 : 4)
         )
         .contentShape(shape)
-        .offset(y: isHovering && !presentation.isExpanded ? 2 : 0)
+        .offset(y: topInset)
         .onHover { isHovering in
             if isHovering, !presentation.isExpanded {
                 performHoverHaptic()
@@ -137,16 +154,25 @@ struct IslandRootView: View {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }
 
+    private var attentionSessions: [AgentSession] {
+        store.sessions.filter(\.needsAttention)
+    }
+
     private var collapsedContent: some View {
         HStack(spacing: 6) {
-            BrandSpark(state: selectedSession?.state ?? .idle)
+            BrandSpark(state: attentionSessions.first?.state ?? .idle)
 
             Spacer(minLength: 0)
 
-            if !store.sessions.isEmpty {
+            if !attentionSessions.isEmpty {
+                Text("\(attentionSessions.count)")
+                    .font(.system(size: 11, weight: .heavy))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .monospacedDigit()
+            } else if !store.sessions.isEmpty {
                 Text("\(store.sessions.count)")
                     .font(.system(size: 11, weight: .heavy))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(0.35))
                     .monospacedDigit()
             }
         }
@@ -196,33 +222,53 @@ struct IslandRootView: View {
         .padding(.top, 4)
     }
 
+    private var grouped: (attention: [AgentSession], running: [AgentSession], idleOrDone: [AgentSession]) {
+        var attention: [AgentSession] = []
+        var running: [AgentSession] = []
+        var idleOrDone: [AgentSession] = []
+        for session in store.sessions {
+            switch session.group {
+            case .attention: attention.append(session)
+            case .running: running.append(session)
+            case .idleOrDone: idleOrDone.append(session)
+            }
+        }
+        let byRecency: (AgentSession, AgentSession) -> Bool = { a, b in
+            (a.lastActivityAt ?? .distantPast) > (b.lastActivityAt ?? .distantPast)
+        }
+        return (
+            attention.sorted(by: byRecency),
+            running.sorted(by: byRecency),
+            idleOrDone.sorted(by: byRecency)
+        )
+    }
+
     @ViewBuilder
     private var sessionList: some View {
         if store.sessions.isEmpty {
             emptyState
         } else {
+            let g = grouped
             ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(store.sessions) { session in
-                        SessionRow(
-                            session: session,
-                            isSelected: selectedSession?.id == session.id,
-                            onSelect: {
-                                selectedID = session.id
-                            },
-                            onJump: {
-                                terminalFocus.focusTerminal(for: session)
-                            }
+                LazyVStack(spacing: 2) {
+                    if !g.attention.isEmpty {
+                        SectionHeader(title: "Needs attention", count: g.attention.count)
+                        rows(for: g.attention)
+                    }
+                    if !g.running.isEmpty {
+                        SectionHeader(title: "Running", count: g.running.count)
+                        rows(for: g.running)
+                    }
+                    if !g.idleOrDone.isEmpty {
+                        SectionHeader(
+                            title: "Idle",
+                            count: g.idleOrDone.count,
+                            collapsible: true,
+                            isExpanded: isIdleExpanded,
+                            onToggle: { isIdleExpanded.toggle() }
                         )
-                        .simultaneousGesture(
-                            TapGesture(count: 2).onEnded {
-                                terminalFocus.focusTerminal(for: session)
-                            }
-                        )
-                        .contextMenu {
-                            Button("Jump to terminal") {
-                                terminalFocus.focusTerminal(for: session)
-                            }
+                        if isIdleExpanded {
+                            rows(for: g.idleOrDone)
                         }
                     }
                 }
@@ -232,14 +278,35 @@ struct IslandRootView: View {
         }
     }
 
+    @ViewBuilder
+    private func rows(for sessions: [AgentSession]) -> some View {
+        ForEach(sessions) { session in
+            let jump = {
+                store.acknowledge(session)
+                terminalFocus.focusTerminal(for: session)
+            }
+            SessionRow(
+                session: session,
+                isSelected: selectedSession?.id == session.id,
+                onSelect: { selectedID = session.id },
+                onJump: jump
+            )
+            .simultaneousGesture(TapGesture(count: 2).onEnded(jump))
+            .contextMenu {
+                Button("Jump to terminal", action: jump)
+                Button("Dismiss") { store.acknowledge(session) }
+            }
+        }
+    }
+
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "terminal")
                 .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(.secondary)
-            Text("No Claude sessions")
+            Text("No active sessions")
                 .font(.system(size: 14, weight: .semibold))
-            Text("Start Claude Code and Vibenion will pick it up.")
+            Text("Start a Claude or Codex session and Vibenion will pick it up.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }
@@ -255,93 +322,147 @@ private struct SessionRow: View {
     let onSelect: () -> Void
     let onJump: () -> Void
 
+    private var isAcknowledged: Bool {
+        session.needsHuman && !session.needsAttention
+    }
+
+    private var rowOpacity: Double {
+        if session.isStale { return 0.5 }
+        if isAcknowledged { return 0.7 }
+        return 1.0
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            StatusDot(state: session.state)
-                .padding(.top, 5)
+            StateGlyph(state: session.state, muted: isAcknowledged)
+                .frame(width: 18, height: 18)
+                .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(session.title)
+                    Text(identity)
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
 
                     Spacer(minLength: 8)
 
-                    StateBadge(state: session.state)
-
-                    AgentBadge(agent: session.agent)
-
-                    Text(session.elapsed)
+                    Text(stateLine)
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(isAcknowledged ? Color.secondary : session.state.tone)
+                        .monospacedDigit()
+
+                    AgentGlyph(agent: session.agent)
+
+                    if let target = session.terminalTarget {
+                        JumpButton(target: target, action: onJump)
+                    }
                 }
 
-                Text(session.summary)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.72))
-                    .lineLimit(1)
-
-                contextLine
+                if !session.summary.isEmpty {
+                    Text(session.summary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(1)
+                }
             }
-
-            Button(action: onJump) {
-                Image(systemName: "terminal")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.58))
-                    .frame(width: 24, height: 24)
-                    .background(.white.opacity(0.08), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .help("Jump to terminal")
-            .padding(.top, 1)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
+        .opacity(rowOpacity)
         .background(isSelected ? .white.opacity(0.08) : .clear)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture(perform: onSelect)
     }
 
-    private var contextLine: some View {
-        HStack(spacing: 6) {
-            if let branch = session.branch {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 9, weight: .semibold))
-                Text(branch)
-                    .lineLimit(1)
-            }
-
-            if let cwd = session.cwd {
-                Text(cwd)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+    private var identity: String {
+        if let path = session.cwd {
+            let name = (path as NSString).lastPathComponent
+            if !name.isEmpty { return name }
         }
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(.secondary)
+        return session.title
+    }
+
+    private var stateLine: String {
+        "\(session.state.verb) · \(session.elapsed)"
     }
 }
 
-private struct AgentBadge: View {
+private struct SectionHeader: View {
+    let title: String
+    let count: Int
+    var collapsible: Bool = false
+    var isExpanded: Bool = true
+    var onToggle: (() -> Void)? = nil
+
+    var body: some View {
+        Button(action: { onToggle?() }) {
+            HStack(spacing: 6) {
+                if collapsible {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .frame(width: 10)
+                }
+                Text(title.uppercased())
+                    .font(.system(size: 10, weight: .heavy))
+                    .tracking(0.6)
+                Text("\(count)")
+                    .font(.system(size: 10, weight: .heavy))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .monospacedDigit()
+                Spacer()
+            }
+            .foregroundStyle(.white.opacity(0.55))
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!collapsible)
+    }
+}
+
+private struct JumpButton: View {
+    let target: TerminalTarget
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(target.displayName)
+                    .font(.system(size: 10, weight: .semibold))
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(.white.opacity(0.7))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
+    }
+
+    private var tooltip: String {
+        let where_ = target.tabTitle ?? target.windowTitle
+        if let where_, !where_.isEmpty {
+            return "Jump to \(target.displayName) · \(where_)"
+        }
+        return "Jump to \(target.displayName)"
+    }
+}
+
+private struct AgentGlyph: View {
     let agent: AgentKind
 
     var body: some View {
-        HStack(spacing: 4) {
-            Text(mark)
-                .font(.system(size: 9, weight: .black))
-                .baselineOffset(0.5)
-
-            Text(agent.rawValue)
-                .font(.system(size: 10, weight: .bold))
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(color.opacity(0.22))
-        .foregroundStyle(color)
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        Text(mark)
+            .font(.system(size: 11, weight: .black))
+            .foregroundStyle(color)
+            .frame(width: 12)
+            .help(agent.rawValue)
     }
 
     private var mark: String {
@@ -365,28 +486,36 @@ private struct AgentBadge: View {
     }
 }
 
-private struct StateBadge: View {
+private struct StateGlyph: View {
     let state: SessionState
+    var muted: Bool = false
 
     var body: some View {
-        Text(state.rawValue.uppercased())
-            .font(.system(size: 9, weight: .black))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(color.opacity(0.18))
-            .foregroundStyle(color)
-            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        Group {
+            if state == .working {
+                SpinnerGlyph(tint: muted ? .secondary : state.tone)
+            } else {
+                Image(systemName: state.symbolName)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(muted ? Color.secondary : state.tone)
+                    .symbolEffect(.pulse, options: .repeating, isActive: state.shouldPulse && !muted)
+            }
+        }
+        .help(state.verb)
     }
+}
 
-    private var color: Color {
-        switch state {
-        case .running: .mint
-        case .idle: .secondary
-        case .stale: .purple
-        case .needsApproval: .orange
-        case .question: .yellow
-        case .done: .green
-        case .error: .red
+private struct SpinnerGlyph: View {
+    let tint: Color
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+            let angle = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.0) * 360
+            Circle()
+                .trim(from: 0, to: 0.28)
+                .stroke(tint, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                .frame(width: 14, height: 14)
+                .rotationEffect(.degrees(angle))
         }
     }
 }
@@ -394,84 +523,64 @@ private struct StateBadge: View {
 private struct BrandSpark: View {
     let state: SessionState
 
-    @State private var pulse = false
-
     var body: some View {
         Image(systemName: "sparkles")
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(color)
             .symbolEffect(.variableColor.iterative.reversing, options: .repeating, isActive: shouldPulse)
-            .opacity(pulse ? 1.0 : 0.92)
-            .onAppear {
-                if shouldPulse {
-                    withAnimation(.easeInOut(duration: 1.0).repeatForever()) {
-                        pulse = true
-                    }
-                }
-            }
     }
 
     private var shouldPulse: Bool {
         switch state {
-        case .running, .needsApproval, .question: true
+        case .working, .asking: true
         default: false
         }
     }
 
     private var color: Color {
         switch state {
-        case .running: .mint
+        case .working: .mint
+        case .ready: Color(red: 0.46, green: 0.74, blue: 1.0)
         case .idle: Color.white.opacity(0.5)
-        case .stale: .purple
-        case .needsApproval: .orange
-        case .question: .yellow
+        case .asking: .orange
         case .done: .green
-        case .error: .red
         }
     }
 }
 
-private struct StatusDot: View {
-    let state: SessionState
-
-    @State private var pulsing = false
-
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 8, height: 8)
-            .overlay(
-                Circle()
-                    .stroke(color.opacity(0.45), lineWidth: 2)
-                    .scaleEffect(pulsing ? 2.0 : 1.0)
-                    .opacity(pulsing ? 0 : 0.8)
-            )
-            .onAppear {
-                if shouldPulse {
-                    withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) {
-                        pulsing = true
-                    }
-                }
-            }
-    }
-
-    private var shouldPulse: Bool {
-        switch state {
-        case .running, .needsApproval, .question: true
-        default: false
+extension SessionState {
+    var symbolName: String {
+        switch self {
+        case .working: "play.fill"
+        case .ready: "ellipsis.circle.fill"
+        case .idle: "moon.zzz.fill"
+        case .asking: "hand.raised.fill"
+        case .done: "checkmark.circle.fill"
         }
     }
 
-    private var color: Color {
-        switch state {
-        case .running: .mint
+    var verb: String {
+        switch self {
+        case .working: "Working"
+        case .ready: "Ready"
+        case .idle: "Idle"
+        case .asking: "Asking"
+        case .done: "Done"
+        }
+    }
+
+    var tone: Color {
+        switch self {
+        case .working: .mint
+        case .ready: Color(red: 0.46, green: 0.74, blue: 1.0)
         case .idle: .gray
-        case .stale: .purple
-        case .needsApproval: .orange
-        case .question: .yellow
+        case .asking: .orange
         case .done: .green
-        case .error: .red
         }
+    }
+
+    var shouldPulse: Bool {
+        false
     }
 }
 

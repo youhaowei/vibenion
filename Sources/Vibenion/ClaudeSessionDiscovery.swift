@@ -33,6 +33,7 @@ struct ClaudeDiscoveredSession: Sendable {
     let repo: RepoContext
     let isProcessAlive: Bool?
     let messageCount: Int?
+    let transcriptModifiedAt: Date?
 }
 
 struct ClaudeSessionDiscovery: Sendable {
@@ -147,7 +148,8 @@ struct ClaudeSessionDiscovery: Sendable {
                     metadata: metadata,
                     repo: indexedRepoContext(projectPath: entry.projectPath, branch: entry.gitBranch),
                     isProcessAlive: nil,
-                    messageCount: entry.messageCount
+                    messageCount: entry.messageCount,
+                    transcriptModifiedAt: transcriptModifiedAt(sessionID: entry.sessionID, cwd: entry.projectPath)
                 )
             }
     }
@@ -164,8 +166,18 @@ struct ClaudeSessionDiscovery: Sendable {
             metadata: metadata,
             repo: resolveRepoContext(cwd: metadata.cwd, indexedBranch: nil),
             isProcessAlive: metadata.pid.map(isProcessAlive),
-            messageCount: nil
+            messageCount: nil,
+            transcriptModifiedAt: transcriptModifiedAt(sessionID: metadata.sessionID, cwd: metadata.cwd)
         )
+    }
+
+    private func transcriptModifiedAt(sessionID: String, cwd: String) -> Date? {
+        let encoded = cwd.replacingOccurrences(of: "/", with: "-")
+        let url = projectsDirectory
+            .appendingPathComponent(encoded)
+            .appendingPathComponent("\(sessionID).jsonl")
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attrs?[.modificationDate] as? Date
     }
 
     private func resolveRepoContext(cwd: String, indexedBranch: String?) -> RepoContext {
